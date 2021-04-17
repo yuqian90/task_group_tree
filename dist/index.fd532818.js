@@ -645,17 +645,13 @@ function rectId(taskId, executionDate) {
 }
 function childrenNodeIds(node) {
   const nodeIds = [];
-  forEachChild(node, child => nodeIds.push(child.id));
+  node.each(child => nodeIds.push(child.id));
   return nodeIds;
-}
-function forEachChild(node, callback) {
-  callback(node);
-  if (node._children) node._children.forEach(child => forEachChild(child, callback));
 }
 // Given a node, return the unique execution_date of itself and its children
 function childrenExecutionDates(node) {
   const uniqueDates = new Set();
-  forEachChild(node, child => {
+  node.each(child => {
     if (child.data.task_instances) child.data.task_instances.forEach(date => uniqueDates.add(date));
   });
   return uniqueDates;
