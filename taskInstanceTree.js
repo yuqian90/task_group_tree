@@ -97,6 +97,14 @@ function childrenExecutionDates(node) {
     return uniqueDates;
 }
 
+// Find the height of the tree that is currently expanded
+function expandedHeight(node) {
+    if (!node.children)
+        return 0;
+
+    return 1 + Math.max(...node.children.map(child => expandedHeight(child)));
+}
+
 export class TaskInstanceTree extends HTMLElement {
     constructor(dagId, nodes) {
         super();
@@ -142,8 +150,11 @@ export class TaskInstanceTree extends HTMLElement {
         const margin = 6 * nodeSize;
         // The vertical spacing between nodes
         const vSpread = nodeSize * 1.3;
+
+        const maxLabelLength = Math.max(...this.root.descendants().map(d => d.data.label.length));
+
         // The horizontal spacing between nodes
-        const hSpread = nodeSize * 10;
+        const hSpread = nodeSize * Math.min(15, maxLabelLength);
 
         this.root.x0 = nodeSize / 2;
         this.root.y0 = 0;
@@ -163,20 +174,12 @@ export class TaskInstanceTree extends HTMLElement {
             })
         });
 
-        // The point on the horizontal scale where the task instances should be placed
-        const hStart = hSpread * this.root.height;
 
         // The scale used to place task instances on the horizontal axis.
         // TODO: This calculation needs to be updated to handle different schedule_intervals
         const numSquares = maxDate.diff(minDate, 'days');
 
-        const ticks = [...Array(numSquares).keys()].map(i => minDate.clone().add(i, 'day'));
-
-        const hScale = d3.scaleTime()
-            .domain([minDate, maxDate])
-            .range([hStart, hStart + numSquares * vSpread]);
-
-        const svg = d3.create('svg').attr('width', currentWidth());
+        const svg = d3.create('svg');
 
         const canvas = svg.append('g').attr('transform', translate(nodeSize, margin));
 
@@ -191,19 +194,20 @@ export class TaskInstanceTree extends HTMLElement {
             node.children = node.children ? null : node._children;
         }
 
-        // Calculate the current page height needed to display the tree
-        function currentHeight() {
-            return (treeObj.root.descendants().length * vSpread + vSpread) + margin;
-        }
-
-        // Calculate the current page width needed to display the tree
-        function currentWidth() {
-            return hScale.range()[1] + margin;
-        }
-
         const treeObj = this;
 
+        const hScale = d3.scaleTime()
+            .domain([minDate, maxDate])
+            .range([0, 0 + numSquares * vSpread]);
+
+        let hStart0 = 0;
+        let hStart = 0;
+
         function update(source) {
+            // The point on the horizontal scale where the task instances should be placed
+            hStart0 = hStart;
+            hStart = Math.max(hSpread, hSpread * expandedHeight(treeObj.root));
+
             const links = treeObj.root.links();
 
             // Compute the new tree layout.
@@ -248,7 +252,8 @@ export class TaskInstanceTree extends HTMLElement {
                 });
 
             // Transition nodes to their new position.
-            nodeSelection.merge(nodeEnter).transition().duration(duration)
+            nodeSelection.merge(nodeEnter)
+                .transition().duration(duration)
                 .attr("transform", d => translate(d.y, d.x))
                 .attr("fill-opacity", 1)
                 .attr("stroke-opacity", 1);
@@ -287,23 +292,22 @@ export class TaskInstanceTree extends HTMLElement {
 
             taskRowEnter
                 .merge(taskRowSelection)
-                // Add new rect at the original location of the node (i.e. where it's clicked)
                 .attr('class', 'node-state-rect-group')
 
             taskRowEnter
                 // Add new rect at the original location of the node (i.e. where it's clicked)
-                .attr('transform', d => translate(hStart, source.x0))
+                .attr('transform', d => translate(hStart0, source.x0))
                 .transition().duration(duration)
-                .attr('transform', d => translate(0, d.x - nodeSize / 2));
+                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
 
             taskRowSelection
                 // Update existing rect from the original location
-                .attr('transform', d => translate(0, d.x0 - nodeSize / 2))
+                .attr('transform', d => translate(hStart0, d.x0 - nodeSize / 2))
                 .transition().duration(duration)
-                .attr('transform', d => translate(0, d.x - nodeSize / 2));
+                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
 
 
-            taskRowSelection.exit().transition().duration(duration).remove().attr("transform", () => translate(0, source.x));
+            taskRowSelection.exit().transition().duration(duration).remove().attr("transform", () => translate(hStart, source.x));
 
             // For every row, add the cells
             const nodeStateRectSelection = taskRowEnter.selectAll('rect.task-instance-rect,rect.task-group-rect')
@@ -393,7 +397,11 @@ export class TaskInstanceTree extends HTMLElement {
                 d.y0 = d.y;
             });
 
-            svg.transition().duration(duration).attr('height', currentHeight());
+            svg.transition().duration(duration)
+                // Calculate the current page height needed to display the tree
+                .attr('height', (treeObj.root.descendants().length * vSpread + vSpread) + margin)
+                // Calculate the current page width needed to display the tree
+                .attr('width', hStart + hScale.range()[1] + margin);
         }
 
         // Collapse all nodes except the first level of children
