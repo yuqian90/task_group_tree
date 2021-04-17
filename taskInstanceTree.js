@@ -5,12 +5,11 @@ const template = document.createElement('template')
 template.innerHTML = `
 <style>
 .group {
-    fill: white;
-    stroke: cornflowerblue;
+    fill: cornflowerblue;
 }
 
 .task {
-    fill: black;
+    fill: green;
 }
 
 .links {
