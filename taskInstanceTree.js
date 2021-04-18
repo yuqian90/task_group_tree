@@ -79,12 +79,6 @@ function rectId(taskId, executionDate) {
     return JSON.stringify([taskId, executionDate]);
 }
 
-function childrenNodeIds(node) {
-    const nodeIds = [];
-    node.each(child => nodeIds.push(child.id));
-    return nodeIds;
-}
-
 // Given a node, return the unique execution_date of itself and its children
 function childrenExecutionDates(node) {
     const uniqueDates = new Set();
@@ -111,19 +105,20 @@ export class TaskInstanceTree extends HTMLElement {
         this.attachShadow({ mode: 'open' });
         this.shadowRoot.appendChild(template.content.cloneNode(true));
         this.shadowRoot.querySelector('#message').innerText = this.getAttribute('message');
-        this.taskInstanceMap = new Map();
+        this.cellStateMap = new Map();
         this.dagId = dagId;
         this.root = stratifyDag(dagId, nodes);
 
-        this.root.each(d => {
-            d.id = d.data.id;
-            d.x0 = this.root.x0;
-            d.y0 = this.root.y0;
-            d._children = d.children;
-        });
-
+        // Initialize the data for each node
         this.root.each(node => {
-            const nodeIds = childrenNodeIds(node);
+            node.id = node.data.id;
+            node.x0 = this.root.x0;
+            node.y0 = this.root.y0;
+            // _children isn't changed when node is expanded/collapsed.
+            node._children = node.children;
+
+            const nodeIds = [];
+            node.each(child => nodeIds.push(child.id));
             node.row = Array.from(childrenExecutionDates(node)).map(date => {
                 const executionDate = moment.parseZone(date);
                 const id = rectId(node.data.id, executionDate);
@@ -136,7 +131,7 @@ export class TaskInstanceTree extends HTMLElement {
                     nodeIds: nodeIds,
                     checked: true
                 };
-                this.taskInstanceMap.set(id, state);
+                this.cellStateMap.set(id, state);
                 return state;
             });
         });
@@ -206,12 +201,18 @@ export class TaskInstanceTree extends HTMLElement {
         function update(source) {
             // The point on the horizontal scale where the task instances should be placed
             hStart0 = hStart;
-            hStart = Math.max(hSpread, hSpread * expandedHeight(treeObj.root));
+            hStart = hSpread * Math.max(1, expandedHeight(treeObj.root));
 
             const links = treeObj.root.links();
 
             // Compute the new tree layout.
             treeLayout(treeObj.root);
+
+            svg.transition().duration(duration)
+                // Calculate the current page height needed to display the tree
+                .attr('height', (treeObj.root.descendants().length * vSpread + vSpread) + margin)
+                // Calculate the current page width needed to display the tree
+                .attr('width', hStart + hScale.range()[1] + margin);
 
             var i = 0;
             // Push nodes down (pre-order traversal)
@@ -231,11 +232,13 @@ export class TaskInstanceTree extends HTMLElement {
             });
 
             // Update the nodes…
-            const nodeSelection = gNode.selectAll("g.task-node")
+            const nodeUpdate = gNode.selectAll("g.task-node")
                 .data(treeObj.root.descendants(), d => d.id);
 
             // Enter any new nodes at the parent's previous position.
-            const nodeEnter = nodeSelection.enter().append("g")
+            const nodeEnter = nodeUpdate.enter().append("g");
+
+            nodeEnter
                 .attr('class', 'task-node')
                 .attr("transform", d => translate(source.y0, source.x0))
                 .attr("fill-opacity", 0)
@@ -252,14 +255,14 @@ export class TaskInstanceTree extends HTMLElement {
                 });
 
             // Transition nodes to their new position.
-            nodeSelection.merge(nodeEnter)
+            nodeUpdate.merge(nodeEnter)
                 .transition().duration(duration)
                 .attr("transform", d => translate(d.y, d.x))
                 .attr("fill-opacity", 1)
                 .attr("stroke-opacity", 1);
 
             // Transition exiting nodes to the parent's new position.
-            nodeSelection.exit().transition().duration(duration).remove()
+            nodeUpdate.exit().transition().duration(duration).remove()
                 .attr("transform", d => translate(source.y, source.x))
                 .attr("fill-opacity", 0)
                 .attr("stroke-opacity", 0);
@@ -273,86 +276,11 @@ export class TaskInstanceTree extends HTMLElement {
                 .attr("class", 'label')
                 .attr("dy", '0.31em')
                 // Use merge because text attributes may change when collapsing expanding nodes
-                .merge(nodeSelection.select('text'))
+                .merge(nodeUpdate.select('text'))
                 .transition().duration(duration)
                 .attr('text-anchor', d => isLeafNode(d) ? 'end' : 'start')
                 .attr("x", d => (isLeafNode(d) ? -nodeSize : nodeSize) * 0.8)
                 .text(d => d.data.label);
-
-            // Create or update a node-state-rect-group for each TaskInstance and TaskGroup.
-            // This is the container for task instance checkboxes on the same row.
-            // Also sets up the nodes so that each node has a row attribute that corresponds to
-            // the row of task instance state rect for that node.
-            const taskRowSelection = gNode.selectAll("g.node-state-rect-group")
-                .data(treeObj.root.descendants(), d => d.id);
-
-            const taskRowEnter = taskRowSelection
-                .enter()
-                .append('g');
-
-            taskRowEnter
-                .merge(taskRowSelection)
-                .attr('class', 'node-state-rect-group')
-
-            taskRowEnter
-                // Add new rect at the original location of the node (i.e. where it's clicked)
-                .attr('transform', d => translate(hStart0, source.x0))
-                .transition().duration(duration)
-                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
-
-            taskRowSelection
-                // Update existing rect from the original location
-                .attr('transform', d => translate(hStart0, d.x0 - nodeSize / 2))
-                .transition().duration(duration)
-                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
-
-
-            taskRowSelection.exit().transition().duration(duration).remove().attr("transform", () => translate(hStart, source.x));
-
-            // For every row, add the cells
-            const nodeStateRectSelection = taskRowEnter.selectAll('rect.task-instance-rect,rect.task-group-rect')
-                .data(d => d.row, d => d.id);
-
-            function toggleChecked(cell) {
-                console.log(`Toggle ${cell.node.data.id} ${cell.executionDate.format('YYYYMMDD')} ${cell.nodeIds}`);
-                cell.checked = !cell.checked;
-                const rectIds = new Set(cell.nodeIds.map(nodeId => rectId(nodeId, cell.executionDate)));
-                // Update model state. Some tasks do not have a TaskInstance on certain days so filter out undefined.
-                Array.from(rectIds).map(id => treeObj.taskInstanceMap.get(id)).filter(d => d != undefined).forEach(state => state.checked = cell.checked);
-                // Update UI state TODO: Why is this needed when update(cell.node) is called?
-                // update(cell.node);
-                const target = gNode.selectAll('rect').filter(d => rectIds.has(d.id));
-                target.classed('rect-unchecked', !cell.checked);
-            }
-
-            const nodeStateRectEnter = nodeStateRectSelection.enter();
-
-            nodeStateRectEnter
-                .append('rect')
-                .merge(nodeStateRectSelection)
-                .attr('class', d => d.nodeType == 'TaskGroup' ? 'task-group-rect' : 'task-instance-rect')
-                // TODO: This should be the only place the unchecked class needs to be set.
-                .classed('rect-unchecked', d => !d.checked)
-                .attr('width', nodeSize)
-                .attr('height', nodeSize)
-                .on('click', (event, d) => {
-                    event.preventDefault();
-                    toggleChecked(d);
-                })
-                .transition().duration(duration)
-                .attr('x', d => {
-                    return hScale(d.executionDate)
-                });
-
-            // Label the top row (the cells that have no parent). Similar outcome could have been achieved with
-            // d3.axisTop(), but it makes the axis label too difficult to align with the cells perfectly.
-            // So creating a text element for each top rect instead.
-            nodeStateRectEnter.filter(d => d.node.parent == null)
-                .append('text')
-                .text(d => d.executionDate.format('YYYYMMDD'))
-                .transition().duration(duration)
-                .attr('transform', d => `${translate(hScale(d.executionDate) + vSpread / 2, -vSpread / 2)} rotate(-60)`)
-                .attr('class', 'axis-label');
 
             // Draw link and transition it to the location to link source and target nodes
             function drawLinkWithTransition(action) {
@@ -397,11 +325,81 @@ export class TaskInstanceTree extends HTMLElement {
                 d.y0 = d.y;
             });
 
-            svg.transition().duration(duration)
-                // Calculate the current page height needed to display the tree
-                .attr('height', (treeObj.root.descendants().length * vSpread + vSpread) + margin)
-                // Calculate the current page width needed to display the tree
-                .attr('width', hStart + hScale.range()[1] + margin);
+            // Create or update a node-state-rect-group for each TaskInstance and TaskGroup.
+            // This is the container for task instance checkboxes on the same row.
+            // Also sets up the nodes so that each node has a row attribute that corresponds to
+            // the row of task instance state rect for that node.
+            const taskRowUpdate = gNode.selectAll("g.node-state-rect-group")
+                .data(treeObj.root.descendants(), d => d.id);
+
+            const taskRowEnter = taskRowUpdate
+                .enter()
+                .append('g');
+
+            taskRowEnter
+                .merge(taskRowUpdate)
+                .attr('class', 'node-state-rect-group')
+
+            taskRowEnter
+                // Add new rect at the original location of the node (i.e. where it's clicked)
+                .attr('transform', d => translate(hStart0, source.x0))
+                .transition().duration(duration)
+                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
+
+            taskRowUpdate
+                // Update existing rect from the original location
+                .attr('transform', d => translate(hStart0, d.x0 - nodeSize / 2))
+                .transition().duration(duration)
+                .attr('transform', d => translate(hStart, d.x - nodeSize / 2));
+
+
+            taskRowUpdate.exit().transition().duration(duration).remove().attr("transform", () => translate(hStart, source.x));
+
+
+            function toggleChecked(cell) {
+                cell.checked = !cell.checked;
+                const rectIds = new Set(cell.nodeIds.map(nodeId => rectId(nodeId, cell.executionDate)));
+                // Update model state. Some tasks do not have a TaskInstance on certain days so filter out undefined.
+                Array.from(rectIds).map(id => treeObj.cellStateMap.get(id)).filter(d => d != undefined).forEach(state => state.checked = cell.checked);
+            }
+
+            // For every row, add the cells
+            const nodeStateRectUpdate = taskRowEnter.merge(taskRowUpdate).selectAll('rect.task-instance-rect,rect.task-group-rect')
+                .data(d => d.row, d => d.id);
+
+            const nodeStateRectEnterUpdate = nodeStateRectUpdate.enter().append('rect').merge(nodeStateRectUpdate);
+
+            nodeStateRectEnterUpdate
+                .attr('class', d => d.nodeType == 'TaskGroup' ? 'task-group-rect' : 'task-instance-rect')
+                .attr('width', nodeSize)
+                .attr('height', nodeSize)
+                .on('click', (event, d) => {
+                    event.preventDefault();
+                    toggleChecked(d);
+                    updateSelection();
+                })
+                .transition().duration(duration)
+                .attr('x', d => {
+                    return hScale(d.executionDate)
+                });
+
+
+            function updateSelection() {
+                nodeStateRectEnterUpdate
+                    .classed('rect-unchecked', d => !d.checked);
+            }
+
+            updateSelection();
+
+            // Label the top row (the cells that have no parent). Similar outcome could have been achieved with
+            // d3.axisTop(), but it makes the axis label too difficult to align with the cells perfectly.
+            // So creating a text element for each top rect instead.
+            nodeStateRectUpdate.enter().filter(d => d.node.parent == null)
+                .append('text')
+                .text(d => d.executionDate.format('YYYYMMDD'))
+                .transition().duration(duration)
+                .attr('transform', d => `${translate(hScale(d.executionDate) + vSpread / 2, -vSpread / 2)} rotate(-60)`)
+                .attr('class', 'axis-label');
         }
 
         // Collapse all nodes except the first level of children
@@ -412,10 +410,10 @@ export class TaskInstanceTree extends HTMLElement {
     }
 
     getExcludedTaskInstances() {
-        return Array.from(this.taskInstanceMap.values()).filter(val => !val.checked && val.nodeType == 'BaseOperator')
+        return Array.from(this.cellStateMap.values()).filter(val => !val.checked && val.nodeType == 'BaseOperator')
             .map(val => {
                 const [task_id, execution_date] = JSON.parse(val.id);
-                return {dag_id: this.dagId, task_id: task_id, execution_date: execution_date};
+                return { dag_id: this.dagId, task_id: task_id, execution_date: execution_date };
             });
     }
 };
