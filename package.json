@@ -4,7 +4,8 @@
   "description": "A demo of rendering Tree View for TaskGroup",
   "main": "index.html",
   "scripts": {
-    "test": "parcel index.html"
+    "test": "parcel index.html",
+    "build": "parcel index.html --public-url ./"
   },
   "author": "qian",
   "license": "Apache-2.0",
