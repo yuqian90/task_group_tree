@@ -656,6 +656,10 @@ function expandedHeight(node) {
   if (!node.children) return 0;
   return 1 + Math.max(...node.children.map(child => expandedHeight(child)));
 }
+// Returns if node is a leaf node (except a collapsed root node)
+function isLeafNode(node) {
+  return !node.children && node.parent != null;
+}
 class TaskInstanceTree extends HTMLElement {
   constructor(dagId, nodes) {
     super();
@@ -770,10 +774,6 @@ class TaskInstanceTree extends HTMLElement {
       nodeUpdate.merge(nodeEnter).transition().duration(duration).attr("transform", d => translate(d.y, d.x)).attr("fill-opacity", 1).attr("stroke-opacity", 1);
       // Transition exiting nodes to the parent's new position.
       nodeUpdate.exit().transition().duration(duration).remove().attr("transform", d => translate(source.y, source.x)).attr("fill-opacity", 0).attr("stroke-opacity", 0);
-      // Returns if node is a leaf node (except a collapsed root node)
-      function isLeafNode(node) {
-        return !node.children && node.parent != null;
-      }
       nodeEnter.append("text").attr("class", 'label').attr("dy", '0.31em').// Use merge because text attributes may change when collapsing expanding nodes
       merge(nodeUpdate.select('text')).transition().duration(duration).attr('text-anchor', d => isLeafNode(d) ? 'end' : 'start').attr("x", d => (isLeafNode(d) ? -nodeSize : nodeSize) * 0.8).text(d => d.data.label);
       // Draw link and transition it to the location to link source and target nodes
