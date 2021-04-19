@@ -99,6 +99,11 @@ function expandedHeight(node) {
     return 1 + Math.max(...node.children.map(child => expandedHeight(child)));
 }
 
+// Returns if node is a leaf node (except a collapsed root node)
+function isLeafNode(node) {
+    return (!node.children && node.parent != null);
+}
+
 export class TaskInstanceTree extends HTMLElement {
     constructor(dagId, nodes) {
         super();
@@ -266,11 +271,6 @@ export class TaskInstanceTree extends HTMLElement {
                 .attr("transform", d => translate(source.y, source.x))
                 .attr("fill-opacity", 0)
                 .attr("stroke-opacity", 0);
-
-            // Returns if node is a leaf node (except a collapsed root node)
-            function isLeafNode(node) {
-                return (!node.children && node.parent != null);
-            }
 
             nodeEnter.append("text")
                 .attr("class", 'label')
